@@ -50,6 +50,8 @@ class AccountJournal(models.Model):
     settlement_tax = fields.Selection(selection_add=[
         # ('vat', 'VAT'),
         # ('profits', 'Profits'),
+        ('misiones', 'TXT IIBB aplicado DGR Misiones'),
+        ('drei_aplicado', 'TXT DREI Aplicado'),
         ('sicore_aplicado', 'TXT SICORE Aplicado'),
         ('iibb_sufrido', 'TXT IIBB p/ SIFERE'),
         ('iibb_aplicado', 'TXT Perc/Ret IIBB aplicadas ARBA: Percepciones ( excepto actividad 29, 7 quincenal, 7 y 17 de Bancos)'),
@@ -1004,6 +1006,12 @@ class AccountJournal(models.Model):
 
         tal vez querramos agregar chequeo de que es "sifere" viendo que es
         cia multilateral
+
+        * el txt generado se puede probar en este aplicativo de pruebas
+        http://www.ca.gov.ar/descargar/sifereweb/SifereClientAppDEDUCCIONES.zip
+
+        * para consultas directo a sifere mesa de ayuda enviar correo electronico a
+        sifereweb@comisionarbitral.gob.ar
         """
         self.ensure_one()
 
@@ -1133,7 +1141,7 @@ class AccountJournal(models.Model):
                 content += '%016d' % int(re.sub('[^0-9]', '', move.l10n_latam_document_number))
                 #Importe del comprobante
                 codop = '1'
-                issue_date = payment.date
+                issue_date = payment.payment_date
                 amount_tot = abs(payment.payment_group_id.payments_amount)
                 base_amount = payment.withholdable_base_amount
 
@@ -1232,5 +1240,106 @@ class AccountJournal(models.Model):
             # 'txt_filename': 'SICORE_%s_%s_%s.txt' % (
             #     re.sub(r'[^\d\w]', '', self.company_id.name),
             #     self.from_date, self.to_date),
+            'txt_content': content,
+        }]
+
+    def drei_aplicado_files_values(self, move_lines):
+        """ Implementado segun especificación indicada en ticket 39347. También se puede ver detalles en readme
+        """
+        self.ensure_one()
+        content = ''
+        for line in move_lines.sorted(key=lambda r: (r.date, r.id)):
+            if line.payment_id:
+                date = line.payment_id.payment_date
+                content += line.partner_id.ensure_vat()
+                content += line.partner_id.name.ljust(80)[:80]
+                content += '%010d' % int(line.name)
+                content += fields.Date.from_string(date).strftime('%d/%m/%Y')
+                content += '%012.2f' % line.payment_id.withholdable_base_amount
+                content += "{:0>16.6f}".format(line.payment_id.tax_withholding_id._get_rule(line.payment_id.payment_group_id).percentage * 100)
+                content += '%012.2f' % line.payment_id.computed_withholding_amount
+                content += '\n'
+
+        return [{
+            'txt_filename': 'DREI retenciones aplicadas.txt',
+            'txt_content': content,
+        }]
+
+    def misiones_files_values(self, move_lines):
+        """ Implementado segun especificación indicada en ticket 51437. También se puede ver detalles en readme
+        """
+        self.ensure_one()
+        content = ''
+        for line in move_lines.sorted(key=lambda r: (r.date, r.id)):
+            payment = line.payment_id
+            if payment:
+                # Fecha
+                content += fields.Date.from_string(payment.payment_date).strftime('%d-%m-%Y') + ','
+
+                # Constancia
+                content += payment.withholding_number[-8:] + ','
+
+                # Razón Social
+                content += payment.partner_id.name.replace(',','')[:100] + ','
+
+                # Domicilio
+                content += payment.partner_id.street.replace(',','')[:200] + ','
+
+                # CUIT
+                payment.partner_id.ensure_vat()
+                content += payment.partner_id.l10n_ar_formatted_vat + ','
+
+                # Monto de operación
+                content += '%.2f' % (payment.withholdable_base_amount) + ','
+
+                # Alícuota
+                alicuot_line = line.tax_line_id.get_partner_alicuot(
+                line.partner_id, line.date)
+                if not alicuot_line:
+                    raise ValidationError(_(
+                    'No hay alicuota configurada en el partner '
+                    '"%s" (id: %s)') % (
+                        line.partner_id.name, line.partner_id.id))
+
+                content += str(line.tax_line_id.get_partner_alicuot(
+                line.partner_id, line.date).alicuota_retencion)
+
+                content += '\n'
+            elif line.move_id.is_invoice():
+                # Fecha
+                content += line.move_id.invoice_date.strftime('%d-%m-%Y') + ','
+
+                # Tipo de comprobante
+                content += line.move_id.l10n_latam_document_type_id.doc_code_prefix.replace('-','_') + ','
+
+                # Número
+                content += line.move_id.l10n_latam_document_number.replace('-','')[:20] + ','
+
+                # Nombre
+                content += line.move_id.partner_id.name[:100] + ','
+
+                # CUIT
+                content += line.move_id.partner_id.ensure_vat() + ','
+
+                # Importe de la operación, consultar si l10n_latam_price_net es correcto
+                tax_group_id = line.tax_line_id.tax_group_id.id
+                for x in line.move_id.amount_by_group:
+                    if x[-1] == tax_group_id:
+                        content += str(x[2]) + ','
+
+                # Alícuota
+                alicuot_line = line.tax_line_id.get_partner_alicuot(
+                line.partner_id, line.date)
+                if not alicuot_line:
+                    raise ValidationError(_(
+                    'No hay alicuota configurada en el partner '
+                    '"%s" (id: %s)') % (
+                        line.partner_id.name, line.partner_id.id))
+                content += str(line.tax_line_id.get_partner_alicuot(line.partner_id, line.date).alicuota_percepcion)
+
+                content += '\n'
+
+        return [{
+            'txt_filename': ('Retenciones ' if payment else 'Percepciones ') + 'Misiones.txt',
             'txt_content': content,
         }]

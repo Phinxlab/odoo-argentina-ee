@@ -1,5 +1,6 @@
 from odoo import models, fields, api, _
 from odoo.exceptions import ValidationError
+from odoo.tools.float_utils import float_round
 # from odoo.tools.misc import formatLang
 # from odoo.tools import DEFAULT_SERVER_DATE_FORMAT
 import re
@@ -581,9 +582,9 @@ class AccountJournal(models.Model):
             if payment_group:
                 # solo en comprobantes A, M segun especificacion
                 vat_amount = 0.0
-                total_amount = payment_group.payments_amount
+                total_amount = float_round(payment_group.payments_amount, precision_digits=2)
                 # es lo mismo que payment_group.matched_amount_untaxed
-                taxable_amount = payment.withholdable_base_amount
+                taxable_amount = float_round(payment.withholdable_base_amount, precision_digits=2)
 
                 # lo sacamos por diferencia
                 other_taxes_amount = company_currency.round(
@@ -1141,8 +1142,7 @@ class AccountJournal(models.Model):
                 content += '%016d' % int(re.sub('[^0-9]', '', move.l10n_latam_document_number))
                 #Importe del comprobante
                 codop = '1'
-                # issue_date = payment.payment_date
-                issue_date = payment.date
+                issue_date = payment.date or payment.payment_group_id.payment_date
                 amount_tot = abs(payment.payment_group_id.payments_amount)
                 base_amount = payment.withholdable_base_amount
 
@@ -1251,7 +1251,7 @@ class AccountJournal(models.Model):
         content = ''
         for line in move_lines.sorted(key=lambda r: (r.date, r.id)):
             if line.payment_id:
-                date = line.payment_id.payment_date
+                date = line.payment_id.date or line.date
                 content += line.partner_id.ensure_vat()
                 content += line.partner_id.name.ljust(80)[:80]
                 content += '%010d' % int(line.name)
@@ -1275,7 +1275,7 @@ class AccountJournal(models.Model):
             payment = line.payment_id
             if payment:
                 # Fecha
-                content += fields.Date.from_string(payment.payment_date).strftime('%d-%m-%Y') + ','
+                content += fields.Date.from_string(payment.date).strftime('%d-%m-%Y') + ','
 
                 # Constancia
                 content += payment.withholding_number[-8:] + ','
